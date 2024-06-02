@@ -1,0 +1,11 @@
+{
+  "profiles": {
+    "Decensored(Patch)": {
+      "commandName": "Project",
+      "commandLineArgs": "Assembly-CSharp.dll"
+    },
+    "Decensored(None)": {
+      "commandName": "Project"
+    }
+  }
+}
