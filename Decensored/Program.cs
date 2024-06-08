@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
+using System.Xml.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
@@ -22,8 +23,8 @@ namespace MofuMod {
 			}
 
 			// get module
-			string		modulePath	= args[0];
-			Patcher?	patcher		= Patcher.ReadModule(modulePath);
+			string			modulePath	= args[0];
+			AbstructPatcher?	patcher		= DecensoredPatcher.GetModule(modulePath);
 			if(patcher == null) {
 				return;
 			}
@@ -39,7 +40,7 @@ namespace MofuMod {
 			}
 
 			// patch
-			bool	patched	= patcher.Patch();
+			bool	patched	= patcher.PatchAll();
 			if(!patched) {
 				return;
 			}
@@ -145,88 +146,200 @@ namespace MofuMod {
 		}
 	}
 
-	public class Patcher : AbstructPatcher {
-		protected Patcher(ModuleDefinition module, string modulePath) : base(module, modulePath){
+	public abstract class DecensoredPatcher : AbstructPatcher {
+		protected DecensoredPatcher(ModuleDefinition module, string modulePath) : base(module, modulePath){
 		}
 
-		internal static Patcher?	ReadModule(string modulePath) {
-			try {
-				ModuleDefinition	module	= ModuleDefinition.ReadModule(modulePath);
-				return new Patcher(module, modulePath);
-			}
-			catch(Exception e){
-				Logger.Exception(e, "Failed to open the module. (\"{0}\")", modulePath);
-				return null;
-			}
-		}
-		internal bool	Patch() {
+		override protected Func<bool>[]	GetPatchList() {
 			Func<bool>[]	patchList = {
 				this.PatchDecensored,
 			};
 
-			bool	result	= true;
-			foreach (var patch in patchList) {
-				result	&= patch();
-			}
-
-			if(result) {
-				Logger.Information("All patches were applied successfully.");
-			}
-			else {
-				Logger.Error("Failed to patch.");
-			}
-
-			return result;
+			return patchList;
 		}
 
-		protected bool	PatchDecensored() {
-			string	patchName	= "Decensored";
-			try {
-				// -.GMC.IsMSC()
-				MethodDefinition?	method		= this.GetMethod("", "GMC", "IsMSC");
-				if(method == null) {
-					Logger.Error("Failed to get the target method. (patch: {0})", patchName);
+		abstract protected string	GetPatchName();
+		abstract public bool		CheckTargetModule();
+		abstract protected bool		PatchDecensored();
+
+		public static DecensoredPatcher?	GetModule(string modulePath) {
+			var	supportModuleList	= new (string, Func<string, DecensoredPatcher?>)[]{
+				("CF", CF.Patcher.ReadModule),
+				("FV", FV.Patcher.ReadModule),
+			};
+
+			foreach (var moduleReader in supportModuleList){
+				string			name	= moduleReader.Item1;
+				DecensoredPatcher?	patcher	= moduleReader.Item2(modulePath);
+				bool			result	= (patcher != null) && (patcher.CheckTargetModule());
+				Logger.Debug("Check module: {0} = {1}", name, result);
+
+				if(result) {
+					return patcher;
+				}
+			}
+			return null;
+		}
+	}
+
+	namespace CF {
+		public class Patcher : DecensoredPatcher {
+			protected Patcher(ModuleDefinition module, string modulePath) : base(module, modulePath){
+			}
+
+			internal static Patcher?	ReadModule(string modulePath) {
+				try {
+					ModuleDefinition	module	= ModuleDefinition.ReadModule(modulePath);
+					return new Patcher(module, modulePath);
+				}
+				catch(Exception e){
+					Logger.Exception(e, "Failed to open the module. (\"{0}\")", modulePath);
+					return null;
+				}
+			}
+
+			override protected string	GetPatchName() {
+				return "CF.Decensored";
+			}
+
+			override public bool CheckTargetModule() {
+				// -.TM.SetMSC()
+				MethodDefinition?	method		= this.GetMethod("", "TM", "SetMSC");
+				return method != null;
+			}
+
+			override protected bool	PatchDecensored() {
+				string	patchName	= this.GetPatchName();
+				try {
+					// -.TM.SetMSC()
+					MethodDefinition?	method		= this.GetMethod("", "TM", "SetMSC");
+					if(method == null) {
+						Logger.Error("Failed to get the target method. (patch: {0})", patchName);
+						return false;
+					}
+
+					ILProcessor	ilProcessor	= method.Body.GetILProcessor();
+					var instructions		= ilProcessor.Body.Instructions;
+					Logger.Debug("----- Instructions");
+					for(int i = 0; i < instructions.Count; i++) {
+						Instruction	instruction	= instructions[i];
+						Logger.Debug("[{0:D3}] {1}", i, instruction);
+
+						// ldfld int32 GMain::m_MSC
+						FieldDefinition?	operandField	= instruction.Operand as FieldDefinition;
+						if(
+							(i >= 2)
+							&& (instruction.OpCode.Code == Code.Ldfld)
+							&& (operandField != null && operandField.Name == "m_MSC")
+						) {
+							// ; call(..., this.GM.m_MSC)           -> call(..., 1)
+							// ldarg.0                              -> ldc.i4.1
+							// ldfld        class GMain TM::GM      -> nop
+							// ldfld        int32 GMain::m_MSC      -> nop
+							// ldfld        int32 GMain::m_MSC      -> nop
+							// conv.r4
+							// call         void TM::(Material_SetFloat)(Material, string, float32)
+
+							Logger.Debug("`m_MSC` found. replace...");
+
+							ilProcessor.Replace(instructions[i - 2], Instruction.Create(OpCodes.Ldc_R4, 0.0f));
+							ilProcessor.Replace(instructions[i - 1], Instruction.Create(OpCodes.Nop));
+							ilProcessor.Replace(instructions[i - 0], Instruction.Create(OpCodes.Nop));
+
+							method.Body.Optimize();
+
+							Logger.Information("The patch was applied successfully. (patch: {0})", patchName);
+							return true;
+						}
+					}
+
+					Logger.Error("No instructions found to patch. (patch: {0})", patchName);
+
 					return false;
 				}
-
-				ILProcessor	ilProcessor	= method.Body.GetILProcessor();
-				var instructions		= ilProcessor.Body.Instructions;
-				for(int i = 0; i < instructions.Count; i++) {
-					Instruction	instruction	= instructions[i];
-					Logger.Debug("[{0:D3}] {1}", i, instruction);
-
-					// ldfld int32 GMC::m_MSC
-					FieldDefinition?	operandField	= instruction.Operand as FieldDefinition;
-					if(
-						(i >= 1)
-						&& (instruction.OpCode.Code == Code.Ldfld)
-						&& (operandField != null && operandField.Name == "m_MSC")
-					) {
-						// ; if(this.m_MSC <= 1){ ... }         -> if(1 <= 1){ ... }
-						// ldarg.0                              -> ldc.i4.1
-						// ldfld        int32 GMC::m_MSC        -> nop
-						// ldc.i4.1
-						// bgt.s        +6
-
-						Logger.Debug("`m_MSC` found. replace...");
-
-						ilProcessor.Replace(instructions[i - 1], Instruction.Create(OpCodes.Ldc_I4_1));
-						ilProcessor.Replace(instructions[i - 0], Instruction.Create(OpCodes.Nop));
-
-						method.Body.Optimize();
-
-						Logger.Information("The patch was applied successfully. (patch: {0})", patchName);
-						return true;
-					}
+				catch(Exception e) {
+					Logger.Exception(e, "Failed to patch. (patch: {0})", patchName);
+					return false;
 				}
-
-				Logger.Error("No instructions found to patch. (patch: {0})", patchName);
-
-				return false;
 			}
-			catch(Exception e) {
-				Logger.Exception(e, "Failed to patch. (patch: {0})", patchName);
-				return false;
+		}
+	}
+
+	namespace FV {
+		public class Patcher : DecensoredPatcher {
+			protected Patcher(ModuleDefinition module, string modulePath) : base(module, modulePath){
+			}
+
+			internal static Patcher?	ReadModule(string modulePath) {
+				try {
+					ModuleDefinition	module	= ModuleDefinition.ReadModule(modulePath);
+					return new Patcher(module, modulePath);
+				}
+				catch(Exception e){
+					Logger.Exception(e, "Failed to open the module. (\"{0}\")", modulePath);
+					return null;
+				}
+			}
+
+			override protected string	GetPatchName() {
+				return "FV.Decensored";
+			}
+
+			override public bool CheckTargetModule() {
+				// -.GMC.IsMSC()
+				MethodDefinition?	method		= this.GetMethod("", "GMC", "IsMSC");
+				return method != null;
+			}
+
+			override protected bool	PatchDecensored() {
+				string	patchName	= this.GetPatchName();
+				try {
+					// -.GMC.IsMSC()
+					MethodDefinition?	method		= this.GetMethod("", "GMC", "IsMSC");
+					if(method == null) {
+						Logger.Error("Failed to get the target method. (patch: {0})", patchName);
+						return false;
+					}
+
+					ILProcessor	ilProcessor	= method.Body.GetILProcessor();
+					var instructions		= ilProcessor.Body.Instructions;
+					for(int i = 0; i < instructions.Count; i++) {
+						Instruction	instruction	= instructions[i];
+						Logger.Debug("[{0:D3}] {1}", i, instruction);
+
+						// ldfld int32 GMC::m_MSC
+						FieldDefinition?	operandField	= instruction.Operand as FieldDefinition;
+						if(
+							(i >= 1)
+							&& (instruction.OpCode.Code == Code.Ldfld)
+							&& (operandField != null && operandField.Name == "m_MSC")
+						) {
+							// ; if(this.m_MSC <= 1){ ... }         -> if(1 <= 1){ ... }
+							// ldarg.0                              -> ldc.i4.1
+							// ldfld        int32 GMC::m_MSC        -> nop
+							// ldc.i4.1
+							// bgt.s        +6
+
+							Logger.Debug("`m_MSC` found. replace...");
+
+							ilProcessor.Replace(instructions[i - 1], Instruction.Create(OpCodes.Ldc_I4_1));
+							ilProcessor.Replace(instructions[i - 0], Instruction.Create(OpCodes.Nop));
+
+							method.Body.Optimize();
+
+							Logger.Information("The patch was applied successfully. (patch: {0})", patchName);
+							return true;
+						}
+					}
+
+					Logger.Error("No instructions found to patch. (patch: {0})", patchName);
+
+					return false;
+				}
+				catch(Exception e) {
+					Logger.Exception(e, "Failed to patch. (patch: {0})", patchName);
+					return false;
+				}
 			}
 		}
 	}

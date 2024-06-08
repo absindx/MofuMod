@@ -1,7 +1,7 @@
 ﻿using Mono.Cecil;
 
 namespace MofuMod {
-	public class AbstructPatcher : IDisposable {
+	public abstract class AbstructPatcher : IDisposable {
 		protected ModuleDefinition	module;
 		public string			ModulePath	{get; protected set;}
 
@@ -37,13 +37,6 @@ namespace MofuMod {
 
 		#endregion	// Dispose pattern
 
-		public bool	CheckPatched() {
-			// check type exists `MonoMod.WasHere` in the target assembly
-			AssemblyDefinition	assembly	= this.module.Assembly;
-			bool			patched		= assembly.MainModule.GetType("MonoMod.WasHere") != null;
-			return patched;
-		}
-
 		public bool	SaveModule(string modulePath) {
 			try {
 				// check same path
@@ -60,6 +53,31 @@ namespace MofuMod {
 				Logger.Exception(e, "Failed to write the module. (\"{0}\")", modulePath);
 				return false;
 			}
+		}
+
+		public bool	CheckPatched() {
+			// check type exists `MonoMod.WasHere` in the target assembly
+			AssemblyDefinition	assembly	= this.module.Assembly;
+			bool			patched		= assembly.MainModule.GetType("MonoMod.WasHere") != null;
+			return patched;
+		}
+
+		public bool	PatchAll() {
+			Func<bool>[]	patchList = this.GetPatchList();
+
+			bool	result	= true;
+			foreach (var patch in patchList) {
+				result	&= patch();
+			}
+
+			if(result) {
+				Logger.Information("All patches were applied successfully.");
+			}
+			else {
+				Logger.Error("Failed to patch.");
+			}
+
+			return result;
 		}
 
 		protected MethodDefinition?	GetMethod(string targetNamespace, string targetClass, string targetFunction) {
@@ -80,5 +98,7 @@ namespace MofuMod {
 				return null;
 			}
 		}
+
+		abstract protected Func<bool>[] GetPatchList();
 	}
 }
