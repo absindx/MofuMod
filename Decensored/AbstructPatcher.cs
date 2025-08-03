@@ -1,11 +1,12 @@
-﻿using Mono.Cecil;
+﻿using System;
+using Mono.Cecil;
 
 namespace MofuMod {
 	public abstract class AbstructPatcher : IDisposable {
-		protected ModuleDefinition	module;
+		protected ModuleDefinition?	module;
 		public string			ModulePath	{get; protected set;}
 
-		protected AbstructPatcher(ModuleDefinition module, string modulePath) {
+		protected AbstructPatcher(ModuleDefinition? module, string modulePath) {
 			this.module	= module;
 
 			try {
@@ -30,15 +31,19 @@ namespace MofuMod {
 			}
 
 			if(disposing) {
-				this.module.Dispose();
+				this.module?.Dispose();
 			}
 			this.disposed	= true;
 		}
 
 		#endregion	// Dispose pattern
 
-		public bool	SaveModule(string modulePath) {
+		virtual public bool	SaveModule(string modulePath) {
 			try {
+				if(this.module == null) {
+					return false;
+				}
+
 				// check same path
 				if(this.ModulePath == Path.GetFullPath(modulePath)) {
 					Logger.Error("Modules cannot be saved with the same file name.");
@@ -55,8 +60,11 @@ namespace MofuMod {
 			}
 		}
 
-		public bool	CheckPatched() {
+		virtual public bool	CheckPatched() {
 			// check type exists `MonoMod.WasHere` in the target assembly
+			if(this.module == null) {
+				return false;
+			}
 			AssemblyDefinition	assembly	= this.module.Assembly;
 			bool			patched		= assembly.MainModule.GetType("MonoMod.WasHere") != null;
 			return patched;
@@ -82,6 +90,10 @@ namespace MofuMod {
 
 		protected MethodDefinition?	GetMethod(string targetNamespace, string targetClass, string targetFunction) {
 			try {
+				if(this.module == null) {
+					return null;
+				}
+
 				TypeDefinition		targetType	= this.module.GetType(targetNamespace, targetClass);
 				if(targetType == null) {
 					return null;

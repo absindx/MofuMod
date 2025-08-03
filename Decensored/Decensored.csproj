@@ -13,7 +13,17 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Iced" Version="1.21.0" />
     <PackageReference Include="MonoMod" Version="22.7.31.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="AssetRipper.Primitives">
+      <HintPath>dependencies\AssetRipper.Primitives.dll</HintPath>
+    </Reference>
+    <Reference Include="LibCpp2IL">
+      <HintPath>dependencies\LibCpp2IL.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
 </Project>

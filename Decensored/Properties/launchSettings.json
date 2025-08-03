@@ -1,11 +1,15 @@
 {
   "profiles": {
-    "Decensored(Patch)": {
+    "Decensored(None)": {
+      "commandName": "Project"
+    },
+    "Decensored(Patch CIL)": {
       "commandName": "Project",
       "commandLineArgs": "Assembly-CSharp.dll"
     },
-    "Decensored(None)": {
-      "commandName": "Project"
+    "Decensored(Patch IL2CPP)": {
+      "commandName": "Project",
+      "commandLineArgs": "Resources\\IL2CPP"
     }
   }
 }
